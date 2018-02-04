@@ -1,0 +1,13 @@
+Package: PALM
+Type: Package
+Title: Regression analysis via shortest paths
+Version: 1.0
+Date: 2018-02-03
+Author: Robert Verity
+Maintainer: Robert Verity <r.verity@imperial.ac.uk>
+Description: Uses likelihood-based methods to search for barriers between spatial observations.
+License: GPL (>= 2)
+Imports: Rcpp (>= 0.12.14)
+LinkingTo: Rcpp
+SystemRequirements: C++11
+RoxygenNote: 6.0.1
