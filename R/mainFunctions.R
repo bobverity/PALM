@@ -13,6 +13,7 @@ fitModel <- function(dat, stat, reps=10, cellSize=1, buffer=2*cellSize) {
 	# get hex centre points and polygons
 	hex_pts <- spsample(sp_poly, type="hexagonal", cellsize=cellSize)
 	hex_polys <- HexPoints2SpatialPolygons(hex_pts)
+	nhex <- length(hex_polys)
 	
 	# get list of neighbors to each hex
 	d <- as.matrix(dist(cbind(hex_pts$x, hex_pts$y)))
@@ -27,14 +28,8 @@ fitModel <- function(dat, stat, reps=10, cellSize=1, buffer=2*cellSize) {
 		stop("data falling outside hex map. Increase size of buffer.")
 	}
 	
-	
-	#plot(hex_polys)
-	#return(NULL)
-	
-	# run efficient C++ code
-	args_data <- list(hex_data=hex_data, hex_neighbors=hex_neighbors, stat=mat_to_Rcpp(stat))
-	args_model <- list(reps=reps)
-	output_raw <- fitModel_cpp(args_data, args_model)
+	# initialise friction values
+	friction <- 1 + 0*(abs(hex_pts$x-1) < 0.5)
 	
 	# process output
 	output <- list()
@@ -42,12 +37,25 @@ fitModel <- function(dat, stat, reps=10, cellSize=1, buffer=2*cellSize) {
 	output$hex_polys <- hex_polys
 	output$hex_neighbors <- hex_neighbors
 	output$hex_data <- hex_data
+	output$friction <- friction
+	
+	#return(output)
+	
+	# run efficient C++ code
+	args_data <- list(hex_data=hex_data, hex_neighbors=hex_neighbors, stat=mat_to_Rcpp(stat))
+	args_model <- list(reps=reps, friction=friction)
+	output_raw <- fitModel_cpp(args_data, args_model)
+	
+	
+	# add to output
 	output$path_mat <- output_raw$path_mat
 	output$s <- Rcpp_to_mat(output_raw$s)
 	output$hex_npath <- 	output_raw$hex_npath
 	output$friction <- output_raw$friction
 	output$alpha <- output_raw$alpha
 	output$beta <- output_raw$beta
+	output$SS_res <- output_raw$SS_res
+	output$rSquared <- output_raw$rSquared
 	return(output)
 	
 	
