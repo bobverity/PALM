@@ -18,9 +18,6 @@ void prop_pointSearch(vector<int> &h_list, vector< vector<int> > &neighbors, vec
 // propose hexs by searching in random path from focal hex
 void prop_squiggle(vector<int> &h_list, vector< vector<int> > &neighbors, vector<int> &hex_npath, int searchDepth);
 
-// TODO
-void prop_squiggle2(vector<int> &h_list, vector<double> &delta_list, vector< vector<int> > &neighbors, vector<int> &hex_npath, int searchDepth);
-
 //------------------------------------------------
 // Run model
 // [[Rcpp::export]]
@@ -71,6 +68,10 @@ Rcpp::List fitModel_cpp(Rcpp::List args_data, Rcpp::List args_model) {
         path_mat[ind] = findPath(distance, visited, traceback, friction, hex_neighbors, x[i], x[j], s[ind]);
     }
     
+    // store initial path lengths
+    vector<double> s0 = s;
+    vector<double> friction_best = friction;
+    
     // store paths transecting each hex
     vector< vector<int> > hex_path(nhex);
     vector<int> hex_npath(nhex);
@@ -82,18 +83,27 @@ Rcpp::List fitModel_cpp(Rcpp::List args_data, Rcpp::List args_model) {
         }
     }
     
+    // calculate regression coefficients
+    double Sx=0, Sy=0, Sxx=0, Syy=0, Sxy=0;
+    for (int ind=0; ind<n2; ind++) {
+        Sx += s[ind];
+        Sy += y[ind];
+        Sxx += s[ind]*s[ind];
+        Syy += y[ind]*y[ind];
+        Sxy += s[ind]*y[ind];
+    }
+    double m = (n2*Sxy - Sx*Sy)/(n2*Sxx - Sx*Sx);
+    double c = (Sy - m*Sx)/double(n2);
+    double SS_res = Syy - 2*m*Sxy - 2*c*Sy + m*m*Sxx + 2*m*c*Sx + n2*c*c;
+    double SS_res_global = SS_res;
+    
+    // create Guided Local Search (GLS) objects
+    vector<int> GLSpenalty(nhex);
+    
     // objects for storing results
     vector<double> SS_res_store(reps);
-    vector<double> rSquared_store(reps);
     
-    // begin MCMC
-    double rSquared_old = 0;
-    double SS_res_old = OVERFLO;
-    vector<double> s_new = s;
-    vector<int> h_list;
-    vector<double> delta_list;
-    double frictionDelta = 1;
-    int nHits = 0;
+    // begin main model loop
     for (int rep=0; rep<reps; rep++) {
         //print(rep);
         
@@ -102,156 +112,163 @@ Rcpp::List fitModel_cpp(Rcpp::List args_data, Rcpp::List args_model) {
             print("      iteration",rep+1);
         }
         
-        // sharpen surface
-        //if ( (nHits % 100)==0 && true) {
-        if ( ((rep+1) % 1000)==0 && false) {
-            print("   sharpening");
-            nHits ++;
+        // find best improvement to any hex
+        int best_hex = -1;
+        double best_delta = 0;
+        double best_SS_res = SS_res;
+        for (int i=0; i<nhex; i++) {
             
-            // sharpen surface
-            vector<double> friction2 = friction;
+            // skip if no paths through this hex
+            if (hex_npath[i]==0) {
+                continue;
+            }
+            
+            // calculate sum of x and y in this hex
+            double Rx = 0, Ry = 0;
+            for (int j=0; j<hex_npath[i]; j++) {
+                Rx += s[hex_path[i][j]];
+                Ry += y[hex_path[i][j]];
+            }
+            int k = hex_npath[i];
+            
+            // find optimal delta
+            for (int j=0; j<101; j++) {
+                
+                // update coefficients
+                double delta = 0.1*(-50+j);
+                double Sx_new = Sx + k*delta;
+                double Sxx_new = Sxx + 2*delta*Rx + k*delta*delta;
+                double Sxy_new = Sxy + delta*Ry;
+                
+                double m_new = (n2*Sxy_new - Sx_new*Sy)/(n2*Sxx_new - Sx_new*Sx_new);
+                double c_new = (Sy - m_new*Sx_new)/double(n2);
+                double SS_res_new = Syy - 2*m_new*Sxy_new - 2*c_new*Sy + m_new*m_new*Sxx_new + 2*m_new*c_new*Sx_new + n2*c_new*c_new;
+                
+                // replace if this beats current best hex
+                if ((SS_res_new + GLSpenalty[i]) < best_SS_res) {
+                    best_hex = i;
+                    best_delta = delta;
+                    best_SS_res = SS_res_new;
+                }
+            }
+        }
+        
+        // if no improvement then reached local minimum
+        if (best_hex<0 || ((rep+1) % 100)==0 ) {
+        //if (best_hex<0) {
+            //print("local minumum at iteration ", rep+1);
+            
+            // find highest GLS utility
+            //double best_hex = 0;
+            double best_utility = 0;
             for (int i=0; i<nhex; i++) {
-                for (int j=0; j<int(hex_neighbors[i].size()); j++) {
-                    friction2[i] += friction[hex_neighbors[i][j]];
+                /*
+                // skip if no paths through this hex or zero friction
+                if (hex_npath[i]==0 || friction[i]==0) {
+                    continue;
                 }
-                friction2[i] /= double(hex_neighbors[i].size()+1);
-            }
-            friction = friction2;
-            sort(friction2.begin(), friction2.end());
-            double frictionCutoff = friction2[nhex*0.9];
-            for (int i=0; i<nhex; i++) {
-                if (friction[i] < frictionCutoff) {
-                    friction[i] = 1;
-                } else {
-                    //friction[i] = frictionCutoff;
+                
+                // calculate sum of x and y in this hex
+                double Rx = 0, Ry = 0;
+                for (int j=0; j<hex_npath[i]; j++) {
+                    Rx += s[hex_path[i][j]];
+                    Ry += y[hex_path[i][j]];
                 }
+                int k = hex_npath[i];
+                
+                // update coefficients
+                double delta = -friction[i];
+                double Sx_new = Sx + k*delta;
+                double Sxx_new = Sxx + 2*delta*Rx + k*delta*delta;
+                double Sxy_new = Sxy + delta*Ry;
+                
+                double m_new = (n2*Sxy_new - Sx_new*Sy)/(n2*Sxx_new - Sx_new*Sx_new);
+                double c_new = (Sy - m_new*Sx_new)/double(n2);
+                double SS_res_new = Syy - 2*m_new*Sxy_new - 2*c_new*Sy + m_new*m_new*Sxx_new + 2*m_new*c_new*Sx_new + n2*c_new*c_new;
+                
+                // calculate cost and utility
+                double GLScost = 1/(1 + SS_res_new - SS_res);
+                double GLSutility = GLScost/double(1+GLSpenalty[i]);
+                */
+                
+                if (friction[i]==0) {
+                    continue;
+                }
+                double GLScost = 10.0/abs(friction[i]);
+                double GLSutility = GLScost/double(1+GLSpenalty[i]);
+                
+                // replace if this beats current best hex
+                if (GLSutility > best_utility) {
+                    best_hex = i;
+                    best_utility = GLSutility;
+                }
+                
             }
             
-            // recalculate shortest paths
-            for (int ind=0; ind<n2; ind++) {
-                int i = index_i[ind];
-                int j = index_j[ind];
-                path_mat[ind] = findPath(distance, visited, traceback, friction, hex_neighbors, x[i], x[j], s[ind]);
-            }
+            // increment penalty
+            GLSpenalty[best_hex] ++;
+            friction[best_hex] = 0;
             
-            // recalculate paths transecting each hex
-            hex_path = vector< vector<int> >(nhex);
-            hex_npath = vector<int>(nhex);
-            for (int ind=0; ind<n2; ind++) {
-                for (int k=0; k<int(path_mat[ind].size()); k++) {
-                    int thisHex = path_mat[ind][k];
-                    hex_path[thisHex].push_back(ind);
-                    hex_npath[thisHex] ++;
-                }
-            }
-            //break;
+        } else {
+            
+            // implement improvement to best hex
+            friction[best_hex] += best_delta;
+            
         }
-        
-        // propose by increasing friction around focal node
-        //prop_pointSearch(h_list, hex_neighbors, hex_npath, 0);
-        //prop_pointSearch(h_list, hex_neighbors, hex_npath, sample2(0,2));
-        //prop_squiggle(h_list, hex_neighbors, hex_npath, sample2(0,20));
-        //prop_squiggle(h_list, hex_neighbors, hex_npath, sample2(0,nhex/2));
-        prop_squiggle2(h_list, delta_list, hex_neighbors, hex_npath, sample2(0,nhex/2));
-        
-        
-        // change friction surface
-        frictionDelta = 1 - 2*sample2(0,1);
-        //frictionDelta = 1;
-        for (int i=0; i<int(h_list.size()); i++) {
-            int h = h_list[i];
-            //friction[h] += delta_list[i];
-            friction[h] += frictionDelta;
-        }
-        
-        // get unique list of path indices that pass through target hexs
-        vector<int> u;
-        for (int i=0; i<int(h_list.size()); i++) {
-            int h = h_list[i];
-            if (hex_npath[h]>0) {
-                push_back_multiple(u, hex_path[h]);
-            }
-        }
-        sort(u.begin(), u.end());
-        u.erase(unique(u.begin(), u.end()), u.end());
         
         // recalculate paths
-        vector< vector<int> > store_path(u.size());
-        for (int i=0; i<int(u.size()); i++) {
-            int ind = u[i];
-            store_path[i] = findPath(distance, visited, traceback, friction, hex_neighbors, x[index_i[ind]], x[index_j[ind]], s_new[ind]);
+        int best_npath = hex_npath[best_hex];
+        vector< vector<int> > store_path(best_npath);
+        vector<int> ind_vec(best_npath);
+        for (int i=0; i<best_npath; i++) {
+            int ind = hex_path[best_hex][i];
+            ind_vec[i] = ind;
+            store_path[i] = findPath(distance, visited, traceback, friction, hex_neighbors, x[index_i[ind]], x[index_j[ind]], s[ind]);
         }
         
-        // calculate regression coefficients
-        double Sx=0, Sy=0, Sxx=0, Syy=0, Sxy=0;
+        // remove old paths from hexs
+        for (int i=0; i<best_npath; i++) {
+            int ind = ind_vec[i];
+            for (int j=0; j<int(path_mat[ind].size()); j++) {
+                int h = path_mat[ind][j];
+                hex_path[h].erase(remove(hex_path[h].begin(), hex_path[h].end(), ind), hex_path[h].end());
+                hex_npath[h] --;
+            }
+        }
+        
+        // add new paths to hexs
+        for (int i=0; i<best_npath; i++) {
+            int ind = ind_vec[i];
+            for (int j=0; j<int(store_path[i].size()); j++) {
+                int h = store_path[i][j];
+                hex_path[h].push_back(ind);
+                hex_npath[h] ++;
+            }
+        }
+        
+        // replace path in path_mat
+        for (int i=0; i<best_npath; i++) {
+            int ind = ind_vec[i];
+            path_mat[ind] = store_path[i];
+        }
+        
+        // recalculate regression coefficients
+        Sx=0; Sxx=0; Sxy=0;
         for (int ind=0; ind<n2; ind++) {
-            Sx += s_new[ind];
-            Sy += y[ind];
-            Sxx += s_new[ind]*s_new[ind];
-            Syy += y[ind]*y[ind];
-            Sxy += s_new[ind]*y[ind];
+            Sx += s[ind];
+            Sxx += s[ind]*s[ind];
+            Sxy += s[ind]*y[ind];
         }
+        m = (n2*Sxy - Sx*Sy)/(n2*Sxx - Sx*Sx);
+        c = (Sy - m*Sx)/double(n2);
+        SS_res = Syy - 2*m*Sxy - 2*c*Sy + m*m*Sxx + 2*m*c*Sx + n2*c*c;
         
-        // calculate model fit
-        double m = (0.5*n*(n-1)*Sxy - Sx*Sy)/(0.5*n*(n-1)*Sxx - Sx*Sx);
-        double c = (Sy - m*Sx)/(0.5*n*(n-1));
-        
-        double SS_tot = Syy - Sy*Sy/(0.5*n*(n-1));
-        double SS_res = Syy - 2*m*Sxy - 2*c*Sy + m*m*Sxx + 2*m*c*Sx + 0.5*n*(n-1)*c*c;
-        
-        double rSquared = 1 - SS_res/SS_tot;
-        
-        
-        // if accept proposed change
-        //if (rSquared > rSquared_old) {
-        if (SS_res < SS_res_old) {
-        //if (true) {
-            
-            // update fit
-            nHits ++;
-            rSquared_old = rSquared;
-            SS_res_old = SS_res;
-            s = s_new;
-            
-            // remove old paths from hexs
-            for (int i=0; i<int(u.size()); i++) {
-                for (int k=0; k<int(path_mat[u[i]].size()); k++) {
-                    int h = path_mat[u[i]][k];
-                    hex_path[h].erase(remove(hex_path[h].begin(), hex_path[h].end(), u[i]), hex_path[h].end());
-                }
-            }
-            
-            // add new paths to hexs
-            for (int i=0; i<int(u.size()); i++) {
-                for (int k=0; k<int(store_path[i].size()); k++) {
-                    int h = store_path[i][k];
-                    hex_path[h].push_back(u[i]);
-                }
-            }
-            
-            // replace path in path_mat
-            for (int i=0; i<int(u.size()); i++) {
-                path_mat[u[i]] = store_path[i];
-            }
-            
+        // store fit
+        SS_res_store[rep] = SS_res;
+        if (SS_res < SS_res_global) {
+            SS_res_global = SS_res;
+            friction_best = friction;
         }
-        // reject proposed change
-        else {
-            
-            // revert to previous
-            s_new = s;
-            
-            // reverse changes to friction surface
-            for (int i=0; i<int(h_list.size()); i++) {
-                int h = h_list[i];
-                //friction[h] -= delta_list[i];
-                friction[h] -= frictionDelta;
-            }
-        }
-        
-        // store results of this iteration
-        SS_res_store[rep] = SS_res_old;
-        rSquared_store[rep] = rSquared_old;
         
     }   // end MCMC
     
@@ -262,18 +279,25 @@ Rcpp::List fitModel_cpp(Rcpp::List args_data, Rcpp::List args_model) {
     
     // create ret object
     Rcpp::List ret;
+    ret.push_back(Rcpp::wrap( s0 ));
     ret.push_back(Rcpp::wrap( s ));
+    ret.push_back(Rcpp::wrap( y ));
     ret.push_back(Rcpp::wrap( path_mat ));
     ret.push_back(Rcpp::wrap( friction ));
+    ret.push_back(Rcpp::wrap( friction_best ));
     ret.push_back(Rcpp::wrap( SS_res_store ));
-    ret.push_back(Rcpp::wrap( rSquared_store ));
+    ret.push_back(Rcpp::wrap( GLSpenalty ));
+    
     
     Rcpp::StringVector ret_names;
-    ret_names.push_back("s");
+    ret_names.push_back("s_initial");
+    ret_names.push_back("s_final");
+    ret_names.push_back("y");
     ret_names.push_back("path_mat");
     ret_names.push_back("friction");
+    ret_names.push_back("friction_best");
     ret_names.push_back("SS_res");
-    ret_names.push_back("rSquared");
+    ret_names.push_back("GLSpenalty");
     
     ret.names() = ret_names;
     return ret;
@@ -345,32 +369,12 @@ void prop_squiggle(vector<int> &h_list, vector< vector<int> > &neighbors, vector
 }
 
 //------------------------------------------------
-// TODO
-void prop_squiggle2(vector<int> &h_list, vector<double> &delta_list, vector< vector<int> > &neighbors, vector<int> &hex_npath, int searchDepth) {
-    
-    prop_squiggle(h_list, neighbors, hex_npath, searchDepth);
-    vector<int> h_temp = h_list;
-    delta_list = vector<double>(h_list.size(),1);
-    
-    prop_squiggle(h_list, neighbors, hex_npath, searchDepth);
-    for (int i=0; i<int(h_list.size()); i++) {
-        delta_list.push_back(-1);
-    }
-    push_back_multiple(h_temp, h_list);
-    h_list = h_temp;
-    
-    // remove duplicates
-    //sort(h_list.begin(), h_list.end());
-    //h_list.erase(unique(h_list.begin(), h_list.end()), h_list.end());
-}
-
-//------------------------------------------------
 // find path
 vector< vector<int> > findPath(vector<double> &distance, vector<int> &visited, vector<int> &traceback, vector<double> &friction, vector< vector<int> > &neighbors, int source, vector<int> &dest, vector<double> &s) {
     
     // reset vectors as needed
     fill(distance.begin(), distance.end(), OVERFLO);
-    distance[source] = 0;
+    distance[source] = friction[source];
     fill(visited.begin(), visited.end(), 0);
     fill(traceback.begin(), traceback.end(), 0);
     

@@ -29,7 +29,7 @@ fitModel <- function(dat, stat, reps=10, cellSize=1, buffer=2*cellSize) {
 	}
 	
 	# initialise friction values
-	friction <- 1 + 0*(abs(hex_pts$x-1) < 0.5)
+	friction <- 1 + 0*(abs(hex_pts$x) < 0.5)
 	
 	# process output
 	output <- list()
@@ -37,7 +37,6 @@ fitModel <- function(dat, stat, reps=10, cellSize=1, buffer=2*cellSize) {
 	output$hex_polys <- hex_polys
 	output$hex_neighbors <- hex_neighbors
 	output$hex_data <- hex_data
-	output$friction <- friction
 	
 	#return(output)
 	
@@ -46,23 +45,8 @@ fitModel <- function(dat, stat, reps=10, cellSize=1, buffer=2*cellSize) {
 	args_model <- list(reps=reps, friction=friction)
 	output_raw <- fitModel_cpp(args_data, args_model)
 	
-	
 	# add to output
-	output$path_mat <- output_raw$path_mat
-	output$s <- Rcpp_to_mat(output_raw$s)
-	output$hex_npath <- 	output_raw$hex_npath
-	output$friction <- output_raw$friction
-	output$alpha <- output_raw$alpha
-	output$beta <- output_raw$beta
-	output$SS_res <- output_raw$SS_res
-	output$rSquared <- output_raw$rSquared
+	output <- c(output, output_raw)
+
 	return(output)
-	
-	
-	#output <- list()
-	#output$grid <- raster(Rcpp_to_mat(output_raw$grid)[21:1,], xmn=-10.5, xmx=10.5, ymn=-10.5, ymx=10.5)
-	#output$g <- Rcpp_to_mat(output_raw$grid)
-	#output$s <- Rcpp_to_mat(output_raw$s)
-	
-	#return(output)
 }
