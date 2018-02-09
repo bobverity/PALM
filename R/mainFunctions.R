@@ -2,7 +2,7 @@
 #------------------------------------------------
 # fit the model
 #' @export
-fitModel <- function(dat, stat, reps=10, cellSize=1, buffer=2*cellSize) {
+fitModel <- function(dat, stat, reps=10, bigReps=2, cellSize=1, buffer=2*cellSize) {
 	
 	# get convex hull of data in SpatialPolygons format
 	ch <- chull(dat)
@@ -29,7 +29,8 @@ fitModel <- function(dat, stat, reps=10, cellSize=1, buffer=2*cellSize) {
 	}
 	
 	# initialise friction values
-	friction <- 1 + 0*(abs(hex_pts$x) < 0.5)
+	friction0 <- rep(1,nhex)
+	#friction0 <- 1 + 10*(abs(hex_pts$x) < 0.5)
 	
 	# process output
 	output <- list()
@@ -42,7 +43,7 @@ fitModel <- function(dat, stat, reps=10, cellSize=1, buffer=2*cellSize) {
 	
 	# run efficient C++ code
 	args_data <- list(hex_data=hex_data, hex_neighbors=hex_neighbors, stat=mat_to_Rcpp(stat))
-	args_model <- list(reps=reps, friction=friction)
+	args_model <- list(reps=reps, bigReps=bigReps, friction0=friction0)
 	output_raw <- fitModel_cpp(args_data, args_model)
 	
 	# add to output
